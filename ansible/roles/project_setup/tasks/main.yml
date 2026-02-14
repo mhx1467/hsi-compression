@@ -2,41 +2,97 @@
 # Project setup role
 # Clones/updates project and installs dependencies
 
+- name: Check if project directory exists
+  stat:
+    path: "{{ project_dir }}"
+  register: project_dir_stat
+
+- name: Check if it's a git repository
+  stat:
+    path: "{{ project_dir }}/.git"
+  register: git_dir_stat
+
+- name: Remove existing directory if not a git repo
+  file:
+    path: "{{ project_dir }}"
+    state: absent
+  when: project_dir_stat.stat.exists and not git_dir_stat.stat.exists
+
 - name: Clone or update HSI compression repository
   git:
     repo: "{{ git_repo | default('https://github.com/yourusername/hsi-compression.git') }}"
     dest: "{{ project_dir }}"
-    version: "{{ git_branch | default('main') }}"
+    version: "{{ git_branch | default('master') }}"
     update: yes
-    force: yes
   register: git_result
   changed_when: git_result.changed
 
-- name: Display git clone result
+- name: Display git clone/update result
   debug:
     msg: "Repository {{ 'cloned' if git_result.changed else 'already up to date' }}"
 
-- name: Install project dependencies from pyproject.toml
+- name: Install PyTorch with CUDA 12.1 wheels
   pip:
-    name: "-e[all]"
-    chdir: "{{ project_dir }}"
+    name:
+      - torch
+      - torchvision
+    extra_args: "--index-url https://download.pytorch.org/whl/cu121"
     virtualenv: "{{ venv_dir }}"
-    virtualenv_python: python{{ python_version }}
-  register: pip_install
-  changed_when: pip_install.changed
+    virtualenv_python: python3
+  async: 1800
+  poll: 60
+  register: pytorch_install
 
-- name: Verify installation - test imports
+- name: Install build dependencies (ninja, packaging)
+  pip:
+    name:
+      - ninja
+      - packaging
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python3
+  ignore_errors: yes
+  register: build_deps
+
+- name: Install mamba-ssm without build isolation
+  pip:
+    name: mamba-ssm
+    extra_args: "--no-build-isolation"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python3
+  ignore_errors: yes
+  register: mamba_install
+
+- name: Verify mamba-ssm installation
   shell: |
     source {{ venv_dir }}/bin/activate
-    python -c "from hsi_compression.models import get_model; print('Model imports work')"
-    python -c "from hsi_compression.datasets import get_dataset; print('Dataset imports work')"
-    python -c "from hsi_compression.engine import Trainer; print('Trainer imports work')"
-  register: import_test
+    python -c "from mamba_ssm import Mamba; print('mamba-ssm installed successfully')"
+  args:
+    executable: /bin/bash
+  register: mamba_verify
   changed_when: false
+  ignore_errors: yes
 
-- name: Show import test results
-  debug:
-    msg: "{{ import_test.stdout_lines }}"
+- name: Install project dependencies from pyproject.toml (core only)
+  shell: |
+    . {{ venv_dir }}/bin/activate
+    pip install --upgrade pip setuptools wheel
+    # Install core package first (without optional dependencies)
+    pip install .
+  args:
+    chdir: "{{ project_dir }}"
+    executable: /bin/bash
+  register: pip_install
+  changed_when: "'Successfully installed' in pip_install.stdout or 'already satisfied' in pip_install.stdout"
+
+- name: Verify installation - check core package is installed
+  shell: |
+    . {{ venv_dir }}/bin/activate
+    pip show hsi-compression
+  args:
+    executable: /bin/bash
+  register: package_info
+  changed_when: false
+  ignore_errors: yes
 
 - name: Create required directories
   file:

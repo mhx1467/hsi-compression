@@ -11,6 +11,21 @@ except ImportError:
     Mamba = None
 
 
+def _check_mamba_available(function_name: str):
+    """Helper to provide informative error message if mamba-ssm is not installed."""
+    if Mamba is None:
+        raise ImportError(
+            f"Cannot create {function_name}: mamba-ssm is not installed.\n"
+            "\nTo use Mamba-based models, install mamba-ssm:\n"
+            "  pip install 'hsi-compression[mamba]'\n"
+            "\nIf that fails due to CUDA compilation issues, ensure CUDA development tools are installed:\n"
+            "  apt-get install nvidia-cuda-toolkit nvidia-cuda-dev\n"
+            "  pip install mamba-ssm\n"
+            "\nAlternatively, use the TCN model which doesn't require mamba-ssm:\n"
+            "  python train.py --config hsi_compression/configs/models/tcn_lossless.yaml"
+        )
+
+
 class MambaDecoder(nn.Module):
     """Mamba-based decoder for hyperspectral compression."""
     
@@ -42,8 +57,7 @@ class MambaDecoder(nn.Module):
         """
         super().__init__()
         
-        if Mamba is None:
-            raise ImportError("mamba-ssm not installed. Install with: pip install mamba-ssm")
+        _check_mamba_available("MambaDecoder")
         
         # Initial projection from latent to model dimension
         self.latent_proj = nn.Conv2d(latent_channels, spectral_d_model, 1)
@@ -76,6 +90,7 @@ class MambaDecoder(nn.Module):
     @staticmethod
     def _make_mamba_block(d_model: int, d_state: int, dropout: float):
         """Create a Mamba block for spectral processing."""
+        _check_mamba_available("_make_mamba_block")
         mamba = Mamba(d_model, d_state=d_state)
         norm = nn.LayerNorm(d_model)
         
@@ -92,6 +107,7 @@ class MambaDecoder(nn.Module):
     @staticmethod
     def _make_spatial_mamba_block(d_model: int, d_state: int, window_size: int, dropout: float):
         """Create a Mamba block for spatial processing."""
+        _check_mamba_available("_make_spatial_mamba_block")
         mamba = Mamba(d_model, d_state=d_state)
         norm = nn.LayerNorm(d_model)
         

@@ -7,11 +7,8 @@
   hosts: "{{ target_hosts | default('gpu_servers') }}"
   gather_facts: yes
 
-  vars_prompt:
-    - name: dataset_pull_args
-      prompt: "Extra arguments for pull_dataset (optional, leave blank for defaults)"
-      default: ""
-      private: no
+  vars:
+    dataset_pull_args: "{{ dataset_pull_args | default('') }}"
 
   tasks:
     - name: Display dataset setup information

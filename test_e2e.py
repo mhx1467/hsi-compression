@@ -67,11 +67,15 @@ def test_tcn_model():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Forward pass
-    device = torch.device('cpu')
+    # TCN can run on CPU or CUDA, prefer CUDA if available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+    
     model.to(device)
     model.eval()
     
-    dummy_input = torch.randn(2, 224, 32, 32)
+    dummy_input = torch.randn(2, 224, 32, 32).to(device)
     with torch.no_grad():
         output = model(dummy_input)
     
@@ -101,11 +105,19 @@ def test_mamba_model():
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         
         # Forward pass
-        device = torch.device('cpu')
+        # NOTE: mamba-ssm requires CUDA - use GPU if available, otherwise skip
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+            print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+        else:
+            print(f"⚠ CUDA not available - Mamba model requires GPU")
+            print(f"  Skipping Mamba forward pass test")
+            return model, None
+        
         model.to(device)
         model.eval()
         
-        dummy_input = torch.randn(2, 224, 32, 32)
+        dummy_input = torch.randn(2, 224, 32, 32).to(device)
         with torch.no_grad():
             output = model(dummy_input)
         

@@ -1,161 +1,68 @@
 ---
 # System setup role for GPU training
-# Installs system dependencies and CUDA/cuDNN if needed
+# Simplified version: assumes CUDA is already installed
+# Only handles basic system dependencies
 
-- name: Update system packages
+- name: Wait for unattended-upgrade to finish
+  shell: |
+    # Wait up to 5 minutes for unattended-upgrade to complete
+    for i in {1..30}; do
+      if ! pgrep -x unattended-upgr > /dev/null; then
+        echo "unattended-upgrade finished"
+        exit 0
+      fi
+      echo "Waiting for unattended-upgrade... ($i/30)"
+      sleep 10
+    done
+    echo "WARNING: unattended-upgrade still running after 5 minutes, continuing anyway"
+    exit 0
+  become: yes
+  changed_when: false
+  ignore_errors: yes
+
+- name: Update apt cache
   apt:
     update_cache: yes
-    cache_valid_time: 3600
   become: yes
-  when: ansible_os_family == "Debian"
+  ignore_errors: yes
 
 - name: Install system dependencies
   apt:
     name:
       - build-essential
       - git
-      - curl
       - wget
-      - htop
-      - tmux
-      - vim
-      - nano
-      - pkg-config
-      - libhdf5-dev
-      - libopenmpi-dev
-      - openmpi-bin
-      - openmpi-common
-      - libopenblas-dev
-      - liblapack-dev
-      - gfortran
-      - libffi-dev
+      - curl
       - libssl-dev
-      - zlib1g-dev
-      - libjpeg-dev
-      - libpng-dev
+      - libffi-dev
+      - python3-dev
+      - python3-pip
+      - pkg-config
+      - apt-transport-https
     state: present
   become: yes
-  when: ansible_os_family == "Debian"
+  ignore_errors: yes
 
-- name: Check if NVIDIA GPU is present
+- name: Check CUDA is available
   shell: |
-    lspci | grep -i "NVIDIA" | wc -l
-  register: gpu_count
+    if command -v nvcc &> /dev/null; then
+      CUDA_VERSION=$(nvcc --version | grep "release" | grep -oP '\d+\.\d+')
+      echo "CUDA_FOUND: $CUDA_VERSION"
+    else
+      echo "CUDA_NOT_FOUND"
+    fi
+  register: cuda_check
   changed_when: false
   ignore_errors: yes
 
-- name: Debug GPU detection
+- name: Display CUDA status
   debug:
-    msg: "Found {{ gpu_count.stdout }} NVIDIA GPU(s)"
+    msg: "{{ cuda_check.stdout }}"
 
-- name: Check if CUDA is already installed
-  stat:
-    path: /usr/local/cuda
-  register: cuda_installed
-
-- name: Check CUDA version if installed
-  shell: |
-    /usr/local/cuda/bin/nvcc --version 2>/dev/null | grep "Cuda compilation" || echo "CUDA not found"
-  register: cuda_version
-  changed_when: false
-  when: cuda_installed.stat.exists
-
-- name: Display current CUDA version
-  debug:
-    msg: "CUDA version: {{ cuda_version.stdout }}"
-  when: cuda_installed.stat.exists
-
-- name: Install NVIDIA CUDA Toolkit (if GPU detected and not installed)
-  block:
-    - name: Add NVIDIA CUDA repository
-      shell: |
-        wget -O /tmp/cuda-repo.pin https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-        mv /tmp/cuda-repo.pin /etc/apt/preferences.d/cuda-repository-pin-600
-      become: yes
-
-    - name: Add NVIDIA CUDA GPG key
-      apt_key:
-        url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
-        state: present
-      become: yes
-
-    - name: Add CUDA repository
-      apt_repository:
-        repo: "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
-        state: present
-      become: yes
-
-    - name: Install CUDA Toolkit
-      apt:
-        name:
-          - cuda-toolkit-{{ cuda_version }}
-        state: present
-        update_cache: yes
-      become: yes
-      ignore_errors: yes  # May fail on some systems, that's ok
-
-  when: 
-    - gpu_count.stdout != "0"
-    - not cuda_installed.stat.exists
-    - enable_cuda | bool
-
-- name: Create symbolic link for CUDA (if not exists)
-  file:
-    src: /usr/local/cuda-{{ cuda_version }}/
-    dest: /usr/local/cuda
-    state: link
-  become: yes
-  ignore_errors: yes
-
-- name: Add CUDA to PATH in profile
-  lineinfile:
-    path: /etc/profile.d/cuda.sh
-    line: "{{ item }}"
-    create: yes
-    state: present
-  become: yes
-  with_items:
-    - "export PATH=/usr/local/cuda/bin:$PATH"
-    - "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-  ignore_errors: yes
-
-- name: Check NVIDIA GPU driver status
-  shell: |
-    nvidia-smi 2>/dev/null | head -1 || echo "NVIDIA driver not found"
-  register: nvidia_driver
-  changed_when: false
-  ignore_errors: yes
-
-- name: Display NVIDIA driver status
-  debug:
-    msg: "NVIDIA driver: {{ nvidia_driver.stdout }}"
-
-- name: Set sysctl parameters for training
-  sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    state: present
-    sysctl_set: yes
-  become: yes
-  with_dict:
-    "net.ipv4.tcp_tw_reuse": "1"
-    "net.ipv4.ip_local_port_range": "10000 65000"
-    "net.core.somaxconn": "65535"
-    "net.ipv4.tcp_max_syn_backlog": "65535"
-  ignore_errors: yes
-
-- name: Configure GPU clock settings (if NVIDIA driver available)
-  shell: |
-    nvidia-smi -pm 1 2>/dev/null || echo "Cannot set persistence mode"
-  become: yes
-  changed_when: false
-  ignore_errors: yes
-
-- name: Display system info
-  debug:
+- name: Fail if CUDA not available
+  fail:
     msg: |
-      System setup completed!
-      OS: {{ ansible_os_family }}
-      Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}
-      CPU Count: {{ ansible_processor_vcpus }}
-      Memory: {{ ansible_memtotal_mb }} MB
+      CUDA is not installed or not in PATH.
+      Please ensure CUDA 11.6+ is installed before running this playbook.
+      Install CUDA manually or contact your system administrator.
+  when: "'CUDA_NOT_FOUND' in cuda_check.stdout"

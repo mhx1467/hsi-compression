@@ -24,7 +24,7 @@ print_success() {
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED}$1${NC}"
 }
 
 # Check if Ansible is installed
@@ -63,6 +63,7 @@ case $COMMAND in
         echo "  test              Test connection to all hosts"
         echo "  setup             Setup all GPU servers"
         echo "  setup [host]      Setup specific host"
+        echo "  verify            Verify CUDA and mamba-ssm installation"
         echo "  dataset           Pull dataset on all servers"
         echo "  train [options]   Train model on all servers"
         echo "  eval [options]    Evaluate model on all servers"
@@ -93,6 +94,12 @@ case $COMMAND in
         else
             echo "Cancelled"
         fi
+        ;;
+    
+    verify)
+        print_section "Verifying CUDA and mamba-ssm on gpu_servers"
+        ansible-playbook verify.yml -i inventory.ini -l gpu_servers
+        print_success "Verification completed"
         ;;
     
     dataset)

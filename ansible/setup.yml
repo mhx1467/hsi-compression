@@ -1,45 +1,30 @@
 ---
 # Playbook: setup.yml
-# Sets up remote GPU machine with all dependencies and project
+# Simplified setup for HSI Compression Framework
+# Assumes CUDA is already installed on the remote machine
 # Usage: ansible-playbook setup.yml -i inventory.ini -l gpu_servers
 
 - name: Setup HSI Compression Framework on Remote GPU Machine
   hosts: "{{ target_hosts | default('gpu_servers') }}"
   gather_facts: yes
-  
-  vars_prompt:
-    - name: git_repo
-      prompt: "Git repository URL (leave blank for default)"
-      default: "https://github.com/yourusername/hsi-compression.git"
-      private: no
-    
-    - name: git_branch
-      prompt: "Git branch (default: main)"
-      default: "main"
-      private: no
 
   tasks:
     - name: Display setup information
       debug:
         msg: |
           ============================================
-          HSI Compression Framework Setup
+          HSI Compression Framework Setup (Simplified)
           ============================================
           
           Target hosts: {{ inventory_hostname }}
           OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
-          Python: {{ python_version }}
-          Enable CUDA: {{ enable_cuda }}
           
-          Git repo: {{ git_repo }}
-          Git branch: {{ git_branch }}
+          Note: This setup assumes CUDA is already installed.
           ============================================
 
     - name: Include system setup role
       include_role:
         name: system_setup
-      vars:
-        cuda_version: "{{ cuda_version }}"
 
     - name: Include Python setup role
       include_role:
@@ -48,9 +33,6 @@
     - name: Include project setup role
       include_role:
         name: project_setup
-      vars:
-        git_repo: "{{ git_repo }}"
-        git_branch: "{{ git_branch }}"
 
     - name: Setup completed
       debug:
@@ -59,9 +41,12 @@
           Setup Completed Successfully!
           ============================================
           
-          Project location: {{ project_dir }}
           Virtual environment: {{ venv_dir }}
-          Checkpoint directory: {{ checkpoint_dir }}
+          Activate with: source {{ venv_dir }}/bin/activate
+          
+          To verify installation:
+            source {{ venv_dir }}/bin/activate
+            python -c "from mamba_ssm import Mamba; print('Success')"
           
           Next steps:
           
@@ -69,15 +54,8 @@
              ansible-playbook dataset.yml -i inventory.ini -l {{ inventory_hostname }}
           
           2. Run training:
-             ansible-playbook train.yml -i inventory.ini -l {{ inventory_hostname }} \
-               -e "model_name=tcn_lossless" \
-               -e "training_epochs=100"
+             source {{ venv_dir }}/bin/activate
+             python train.py --config hsi_compression/configs/models/tcn_lossless.yaml
           
           3. Evaluate model:
-             ansible-playbook evaluate.yml -i inventory.ini -l {{ inventory_hostname }} \
-               -e "checkpoint_path={{ checkpoint_dir }}/best_val_loss.pt"
-          
-          4. Or manually SSH to machine and run:
-             ssh {{ ansible_user }}@{{ ansible_host }}
-             source {{ project_dir }}/activate.sh
-             python train.py --config hsi_compression/configs/models/tcn_lossless.yaml
+             ansible-playbook evaluate.yml -i inventory.ini -l {{ inventory_hostname }}

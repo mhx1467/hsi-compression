@@ -1,0 +1,178 @@
+---
+# Playbook: verify.yml
+# Verifies that CUDA and mamba-ssm are properly installed and operational
+# Usage: ansible-playbook verify.yml -i inventory.ini -l gpu_servers
+
+- name: Verify CUDA and mamba-ssm Installation
+  hosts: "{{ target_hosts | default('gpu_servers') }}"
+  gather_facts: no
+
+  tasks:
+    - name: Display verification info
+      debug:
+        msg: |
+          ============================================
+          Verifying CUDA and mamba-ssm
+          ============================================
+          Target: {{ inventory_hostname }}
+
+    - name: Check NVIDIA GPU presence
+      shell: |
+        lspci | grep -i "NVIDIA" | wc -l
+      register: gpu_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report GPU status
+      debug:
+        msg: |
+          GPU Check: {{ gpu_check.stdout }} GPU(s) found
+
+    - name: Check NVIDIA driver
+      shell: |
+        nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo "NOT_INSTALLED"
+      register: driver_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report NVIDIA driver
+      debug:
+        msg: |
+          NVIDIA Driver: {{ driver_check.stdout }}
+
+    - name: Check CUDA compiler (nvcc)
+      shell: |
+        which nvcc > /dev/null 2>&1 && nvcc --version | grep "Cuda" || echo "NOT_FOUND"
+      register: nvcc_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report CUDA compiler
+      debug:
+        msg: |
+          CUDA Compiler (nvcc): {{ nvcc_check.stdout | default('NOT_FOUND') }}
+
+    - name: Check mamba-ssm installation
+      shell: |
+        source {{ venv_dir }}/bin/activate
+        python3 -c "from mamba_ssm import Mamba; print('INSTALLED')" 2>&1 || echo "NOT_INSTALLED"
+      args:
+        executable: /bin/bash
+      register: mamba_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report mamba-ssm status
+      debug:
+        msg: |
+          mamba-ssm Status: {{ mamba_check.stdout }}
+
+    - name: Test Mamba model instantiation
+      shell: |
+        source {{ venv_dir }}/bin/activate
+        python3 << 'EOF'
+        import sys
+        try:
+          from mamba_ssm import Mamba
+          import torch
+          
+          # Test instantiation
+          model = Mamba(d_model=256, d_state=16)
+          
+          # Test forward pass
+          x = torch.randn(2, 10, 256)
+          output = model(x)
+          
+          print(f"Mamba model works (output shape: {output.shape})")
+          sys.exit(0)
+        except ImportError as e:
+          print(f"mamba-ssm not available: {e}")
+          sys.exit(1)
+        except Exception as e:
+          print(f"Mamba model test failed: {e}")
+          sys.exit(1)
+        EOF
+      args:
+        executable: /bin/bash
+      register: mamba_test
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report Mamba model test
+      debug:
+        msg: |
+          Mamba Model Test: {{ mamba_test.stdout }}
+
+    - name: Check HSI compression package
+      shell: |
+        source {{ venv_dir }}/bin/activate
+        python3 -c "import hsi_compression; print(f'hsi_compression package found')" 2>&1 || echo "hsi_compression not found"
+      args:
+        executable: /bin/bash
+      register: pkg_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report package status
+      debug:
+        msg: |
+          {{ pkg_check.stdout }}
+
+    - name: List available models
+      shell: |
+        source {{ venv_dir }}/bin/activate
+        python3 -c "
+        from hsi_compression.models.registry import MODEL_REGISTRY
+        print('Available models:')
+        for name in sorted(MODEL_REGISTRY.keys()):
+          print(f'  - {name}')
+        " 2>&1 || echo "Could not list models"
+      args:
+        executable: /bin/bash
+      register: models_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Report available models
+      debug:
+        msg: |
+          {{ models_check.stdout }}
+
+    - name: Final verification summary
+      debug:
+        msg: |
+          ============================================
+          Verification Summary
+          ============================================
+          
+          NVIDIA GPU(s): {{ gpu_check.stdout }}
+          NVIDIA Driver: {{ driver_check.stdout }}
+          CUDA Compiler: {{ 'FOUND' if 'Cuda' in nvcc_check.stdout else 'NOT FOUND' }}
+          mamba-ssm: {{ 'INSTALLED' if 'INSTALLED' in mamba_check.stdout else 'NOT INSTALLED' }}
+          Mamba Model Test: {{ 'PASSED' if '✓' in mamba_test.stdout else 'FAILED' }}
+          
+          {% if 'INSTALLED' in mamba_check.stdout and 'PASSED' in mamba_test.stdout %}
+          All systems ready for training!
+          
+          You can train Mamba models with:
+            python train.py --config hsi_compression/configs/models/mamba_lossy.yaml
+          
+          Or TCN models with:
+            python train.py --config hsi_compression/configs/models/tcn_lossless.yaml
+          {% else %}
+          ⚠ Some components may be missing
+          
+          Available for training:
+            - TCN model (always available)
+          {% if 'INSTALLED' in mamba_check.stdout %}
+            - Mamba model (installed but test failed)
+          {% else %}
+            - Mamba model (NOT available - mamba-ssm not installed)
+          {% endif %}
+          
+          To troubleshoot:
+            1. Check CUDA installation: which nvcc
+            2. Check mamba-ssm: pip list | grep mamba
+            3. Full manual check: ssh {{ ansible_user }}@{{ ansible_host }}
+          {% endif %}
+          ============================================

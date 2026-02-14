@@ -12,6 +12,21 @@ except ImportError:
     Mamba = None
 
 
+def _check_mamba_available(function_name: str):
+    """Helper to provide informative error message if mamba-ssm is not installed."""
+    if Mamba is None:
+        raise ImportError(
+            f"Cannot create {function_name}: mamba-ssm is not installed.\n"
+            "\nTo use Mamba-based models, install mamba-ssm:\n"
+            "  pip install 'hsi-compression[mamba]'\n"
+            "\nIf that fails due to CUDA compilation issues, ensure CUDA development tools are installed:\n"
+            "  apt-get install nvidia-cuda-toolkit nvidia-cuda-dev\n"
+            "  pip install mamba-ssm\n"
+            "\nAlternatively, use the TCN model which doesn't require mamba-ssm:\n"
+            "  python train.py --config hsi_compression/configs/models/tcn_lossless.yaml"
+        )
+
+
 class SpectralMambaBlock(nn.Module):
     """Mamba block for spectral dimension processing."""
     
@@ -29,8 +44,7 @@ class SpectralMambaBlock(nn.Module):
         """
         super().__init__()
         
-        if Mamba is None:
-            raise ImportError("mamba-ssm not installed. Install with: pip install mamba-ssm")
+        _check_mamba_available("SpectralMambaBlock")
         
         self.mamba = Mamba(d_model, d_state=d_state)
         self.norm = nn.LayerNorm(d_model)
@@ -72,8 +86,7 @@ class SpatialMambaBlock(nn.Module):
         """
         super().__init__()
         
-        if Mamba is None:
-            raise ImportError("mamba-ssm not installed. Install with: pip install mamba-ssm")
+        _check_mamba_available("SpatialMambaBlock")
         
         self.window_size = window_size
         self.mamba = Mamba(d_model, d_state=d_state)

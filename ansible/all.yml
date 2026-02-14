@@ -17,12 +17,6 @@
     training_config: "hsi_compression/configs/models/{{ model_name }}.yaml"
     evaluation_config: "hsi_compression/configs/models/{{ model_name }}.yaml"
 
-  vars_prompt:
-    - name: git_repo
-      prompt: "Git repository URL (leave blank for default)"
-      default: "https://github.com/mhx1467/hsi-compression.git"
-      private: no
-
   tasks:
     - name: Display workflow information
       debug:
@@ -57,8 +51,6 @@
     - name: Step 3 - Project setup
       include_role:
         name: project_setup
-      vars:
-        git_repo: "{{ git_repo }}"
 
     - name: Step 4 - Dataset setup
       include_role:
