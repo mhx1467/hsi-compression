@@ -1,0 +1,101 @@
+---
+# Playbook: all.yml
+# Runs complete setup, dataset, training, and evaluation
+# Usage: ansible-playbook all.yml -i inventory.ini -l gpu_servers \
+#   -e "model_name=tcn_lossless" \
+#   -e "training_epochs=100"
+
+- name: Complete HSI Compression Workflow
+  hosts: "{{ target_hosts | default('gpu_servers') }}"
+  gather_facts: yes
+  
+  vars:
+    model_name: "{{ model_name | default('tcn_lossless') }}"
+    training_epochs: "{{ training_epochs | default(100) }}"
+    batch_size: "{{ batch_size | default(8) }}"
+    learning_rate: "{{ learning_rate | default(0.0001) }}"
+    training_config: "hsi_compression/configs/models/{{ model_name }}.yaml"
+    evaluation_config: "hsi_compression/configs/models/{{ model_name }}.yaml"
+
+  vars_prompt:
+    - name: git_repo
+      prompt: "Git repository URL (leave blank for default)"
+      default: "https://github.com/mhx1467/hsi-compression.git"
+      private: no
+
+  tasks:
+    - name: Display workflow information
+      debug:
+        msg: |
+          ============================================
+          COMPLETE HSI COMPRESSION WORKFLOW
+          ============================================
+          
+          Steps:
+          1. System setup (dependencies, CUDA)
+          2. Python setup (virtual environment)
+          3. Project setup (clone repo, install packages)
+          4. Dataset setup (pull or generate dataset)
+          5. Model training (train for {{ training_epochs }} epochs)
+          6. Model evaluation (evaluate trained model)
+          
+          Target host: {{ inventory_hostname }}
+          Model: {{ model_name }}
+          Training epochs: {{ training_epochs }}
+          ============================================
+
+    - name: Step 1 - System setup
+      include_role:
+        name: system_setup
+      vars:
+        cuda_version: "{{ cuda_version }}"
+
+    - name: Step 2 - Python setup
+      include_role:
+        name: python_setup
+
+    - name: Step 3 - Project setup
+      include_role:
+        name: project_setup
+      vars:
+        git_repo: "{{ git_repo }}"
+
+    - name: Step 4 - Dataset setup
+      include_role:
+        name: dataset_setup
+
+    - name: Step 5 - Model training
+      include_role:
+        name: training
+      vars:
+        training_config: "{{ training_config }}"
+        model_name: "{{ model_name }}"
+        training_epochs: "{{ training_epochs }}"
+        batch_size: "{{ batch_size }}"
+        learning_rate: "{{ learning_rate }}"
+        run_async: false
+
+    - name: Step 6 - Model evaluation
+      include_role:
+        name: evaluation
+      vars:
+        evaluation_config: "{{ evaluation_config }}"
+        checkpoint_path: "{{ checkpoint_dir }}/best_val_loss.pt"
+
+    - name: Workflow completed
+      debug:
+        msg: |
+          ============================================
+          COMPLETE WORKFLOW FINISHED SUCCESSFULLY!
+          ============================================
+          
+          Summary:
+          - Host: {{ inventory_hostname }}
+          - Model: {{ model_name }}
+          - Training epochs: {{ training_epochs }}
+          - Project: {{ project_dir }}
+          - Checkpoints: {{ checkpoint_dir }}
+          - Results: {{ results_dir }}
+          
+          To retrieve results:
+          scp -r {{ ansible_user }}@{{ ansible_host }}:{{ results_dir }}/* ./local_results/

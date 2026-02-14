@@ -1,0 +1,136 @@
+---
+# Project setup role
+# Clones/updates project and installs dependencies
+
+- name: Clone or update HSI compression repository
+  git:
+    repo: "{{ git_repo | default('https://github.com/yourusername/hsi-compression.git') }}"
+    dest: "{{ project_dir }}"
+    version: "{{ git_branch | default('main') }}"
+    update: yes
+    force: yes
+  register: git_result
+  changed_when: git_result.changed
+
+- name: Display git clone result
+  debug:
+    msg: "Repository {{ 'cloned' if git_result.changed else 'already up to date' }}"
+
+- name: Install project dependencies from pyproject.toml
+  pip:
+    name: "-e[all]"
+    chdir: "{{ project_dir }}"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python{{ python_version }}
+  register: pip_install
+  changed_when: pip_install.changed
+
+- name: Verify installation - test imports
+  shell: |
+    source {{ venv_dir }}/bin/activate
+    python -c "from hsi_compression.models import get_model; print('Model imports work')"
+    python -c "from hsi_compression.datasets import get_dataset; print('Dataset imports work')"
+    python -c "from hsi_compression.engine import Trainer; print('Trainer imports work')"
+  register: import_test
+  changed_when: false
+
+- name: Show import test results
+  debug:
+    msg: "{{ import_test.stdout_lines }}"
+
+- name: Create required directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  with_items:
+    - "{{ checkpoint_dir }}"
+    - "{{ logs_dir }}"
+    - "{{ results_dir }}"
+    - "{{ dataset_path }}"
+
+- name: Create activation script for convenience
+  copy:
+    dest: "{{ project_dir }}/activate.sh"
+    content: |
+      #!/bin/bash
+      # Source this script to activate the virtual environment
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      echo "Virtual environment activated"
+      echo "Project directory: $(pwd)"
+      echo "Python: $(python --version)"
+    mode: '0755'
+
+- name: Create helper scripts directory
+  file:
+    path: "{{ project_dir }}/scripts"
+    state: directory
+
+- name: Create training wrapper script
+  copy:
+    dest: "{{ project_dir }}/scripts/train.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      
+      # Parse arguments
+      CONFIG="${1:-hsi_compression/configs/models/tcn_lossless.yaml}"
+      EPOCHS="${2:-100}"
+      
+      echo "Starting training..."
+      echo "Config: $CONFIG"
+      echo "Epochs: $EPOCHS"
+      echo "Checkpoint dir: {{ checkpoint_dir }}"
+      
+      python train.py \
+        --config "$CONFIG" \
+        --overrides \
+          data.root_dir={{ dataset_path }} \
+          training.epochs=$EPOCHS \
+          logging.checkpoint_dir={{ checkpoint_dir }} \
+          logging.wandb_enabled={{ wandb_enabled | lower }}
+    mode: '0755'
+
+- name: Create evaluation wrapper script
+  copy:
+    dest: "{{ project_dir }}/scripts/evaluate.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      
+      # Parse arguments
+      CONFIG="${1:-hsi_compression/configs/models/tcn_lossless.yaml}"
+      CHECKPOINT="${2:-{{ checkpoint_dir }}/best_val_loss.pt}"
+      
+      echo "Starting evaluation..."
+      echo "Config: $CONFIG"
+      echo "Checkpoint: $CHECKPOINT"
+      
+      python evaluate.py \
+        --config "$CONFIG" \
+        --checkpoint "$CHECKPOINT" \
+        --overrides \
+          data.root_dir={{ dataset_path }}
+    mode: '0755'
+
+- name: Display project setup completion
+  debug:
+    msg: |
+      Project setup completed!
+      Project directory: {{ project_dir }}
+      Virtual environment: {{ venv_dir }}
+      Checkpoint directory: {{ checkpoint_dir }}
+      Logs directory: {{ logs_dir }}
+      Dataset path: {{ dataset_path }}
+      
+      Helper scripts created:
+      - {{ project_dir }}/activate.sh (activate environment)
+      - {{ project_dir }}/scripts/train.sh (training)
+      - {{ project_dir }}/scripts/evaluate.sh (evaluation)

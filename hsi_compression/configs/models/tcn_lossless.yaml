@@ -1,0 +1,21 @@
+defaults:
+  - /default
+
+model:
+  name: tcn_lossless
+  spectral_window: 8  # number of previous bands to use
+  tcn:
+    channels: [64, 128, 256]
+    kernel_size: 3
+    dilations: [1, 2, 4, 8]
+  spatial:
+    channels: 64
+    kernel_size: 3
+  output_distribution: gaussian  # or logistic
+  normalize_input: true
+
+entropy:
+  coder: arithmetic  # uses torchac or custom implementation
+
+loss:
+  type: nll  # negative log-likelihood

@@ -1,0 +1,154 @@
+---
+# Training role
+# Executes model training with specified configuration
+
+- name: Validate training parameters
+  assert:
+    that:
+      - training_config is defined
+      - model_name is defined
+    fail_msg: "training_config and model_name must be defined"
+
+- name: Display training configuration
+  debug:
+    msg: |
+      Starting training with:
+      - Model: {{ model_name }}
+      - Config: {{ training_config }}
+      - Epochs: {{ training_epochs | default(100) }}
+      - Batch size: {{ batch_size | default(8) }}
+      - Learning rate: {{ learning_rate | default(0.0001) }}
+      - WandB enabled: {{ wandb_enabled | lower }}
+
+- name: Check if dataset exists
+  stat:
+    path: "{{ dataset_path }}/patches"
+  register: dataset_exists
+
+- name: Fail if dataset doesn't exist
+  fail:
+    msg: "Dataset not found at {{ dataset_path }}. Please run dataset setup first."
+  when: not dataset_exists.stat.exists
+
+- name: Create training config override
+  copy:
+    dest: "{{ project_dir }}/training_overrides.yaml"
+    content: |
+      # Auto-generated training overrides
+      data:
+        root_dir: {{ dataset_path }}
+        batch_size: {{ batch_size | default(8) }}
+        
+      training:
+        epochs: {{ training_epochs | default(100) }}
+        optimizer:
+          lr: {{ learning_rate | default(0.0001) }}
+      
+      logging:
+        checkpoint_dir: {{ checkpoint_dir }}
+        wandb_enabled: {{ wandb_enabled | lower }}
+        {% if wandb_api_key is defined %}
+        wandb:
+          api_key: {{ wandb_api_key }}
+          project: {{ wandb_project | default('hsi-compression') }}
+        {% endif %}
+    mode: '0644'
+
+- name: Create training log file
+  file:
+    path: "{{ logs_dir }}/training_{{ ansible_date_time.iso8601 }}.log"
+    state: touch
+  register: log_file
+
+- name: Start training (in background if requested)
+  shell: |
+    set -e
+    source {{ venv_dir }}/bin/activate
+    cd {{ project_dir }}
+    
+    echo "Training started at $(date)" >> {{ log_file.path }}
+    echo "Model: {{ model_name }}" >> {{ log_file.path }}
+    echo "Config: {{ training_config }}" >> {{ log_file.path }}
+    echo "---" >> {{ log_file.path }}
+    
+    python train.py \
+      --config {{ training_config }} \
+      --overrides \
+        data.root_dir={{ dataset_path }} \
+        training.epochs={{ training_epochs | default(100) }} \
+        data.batch_size={{ batch_size | default(8) }} \
+        training.optimizer.lr={{ learning_rate | default(0.0001) }} \
+        logging.checkpoint_dir={{ checkpoint_dir }} \
+        logging.wandb.enabled={{ wandb_enabled | lower }} \
+        {% if wandb_api_key is defined %} \
+        logging.wandb.api_key='{{ wandb_api_key }}' \
+        {% endif %} \
+        >> {{ log_file.path }} 2>&1
+    
+    echo "Training completed at $(date)" >> {{ log_file.path }}
+  register: training_result
+  async: "{{ training_timeout | default(86400) }}"  # 24 hour default timeout
+  poll: 0  # Don't wait, return immediately
+  when: run_async | default(false) | bool
+  changed_when: true
+
+- name: Start training (synchronously)
+  shell: |
+    set -e
+    source {{ venv_dir }}/bin/activate
+    cd {{ project_dir }}
+    
+    echo "Training started at $(date)" | tee -a {{ log_file.path }}
+    echo "Model: {{ model_name }}" | tee -a {{ log_file.path }}
+    echo "Config: {{ training_config }}" | tee -a {{ log_file.path }}
+    echo "---" | tee -a {{ log_file.path }}
+    
+    python train.py \
+      --config {{ training_config }} \
+      --overrides \
+        data.root_dir={{ dataset_path }} \
+        training.epochs={{ training_epochs | default(100) }} \
+        data.batch_size={{ batch_size | default(8) }} \
+        training.optimizer.lr={{ learning_rate | default(0.0001) }} \
+        logging.checkpoint_dir={{ checkpoint_dir }} \
+        logging.wandb.enabled={{ wandb_enabled | lower }} \
+        {% if wandb_api_key is defined %} \
+        logging.wandb.api_key='{{ wandb_api_key }}' \
+        {% endif %} \
+        2>&1 | tee -a {{ log_file.path }}
+    
+    echo "Training completed at $(date)" | tee -a {{ log_file.path }}
+  register: training_sync_result
+  when: not (run_async | default(false) | bool)
+  changed_when: training_sync_result.stdout != ""
+
+- name: Display training result (sync)
+  debug:
+    msg: |
+      Training completed!
+      Log file: {{ log_file.path }}
+      Status: {{ "Success" if training_sync_result.rc == 0 else "Failed" }}
+  when: not (run_async | default(false) | bool)
+
+- name: Display async training info
+  debug:
+    msg: |
+      Training started in background!
+      Job ID: {{ training_result.ansible_job_id }}
+      Log file: {{ log_file.path }}
+      
+      To check status:
+        ansible-runner exec -j {{ training_result.ansible_job_id }}
+  when: run_async | default(false) | bool
+
+- name: List checkpoints
+  shell: |
+    ls -lh {{ checkpoint_dir }}/*.pt 2>/dev/null | awk '{print $9, "(" $5 ")"}' || echo "No checkpoints yet"
+  register: checkpoints
+  changed_when: false
+
+- name: Display checkpoints
+  debug:
+    msg: |
+      Checkpoints:
+      {{ checkpoints.stdout }}

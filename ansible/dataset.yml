@@ -1,0 +1,47 @@
+---
+# Playbook: dataset.yml
+# Pulls or generates dataset on remote machine
+# Usage: ansible-playbook dataset.yml -i inventory.ini -l gpu_servers
+
+- name: Setup Dataset on Remote Machine
+  hosts: "{{ target_hosts | default('gpu_servers') }}"
+  gather_facts: yes
+
+  vars_prompt:
+    - name: dataset_pull_args
+      prompt: "Extra arguments for pull_dataset (optional, leave blank for defaults)"
+      default: ""
+      private: no
+
+  tasks:
+    - name: Display dataset setup information
+      debug:
+        msg: |
+          ============================================
+          Dataset Setup
+          ============================================
+          
+          Target host: {{ inventory_hostname }}
+          Dataset name: {{ dataset_name }}
+          Dataset path: {{ dataset_path }}
+          Pull script: {{ pull_dataset_script }}
+          Extra args: {{ dataset_pull_args | default('(none)') }}
+          ============================================
+
+    - name: Include dataset setup role
+      include_role:
+        name: dataset_setup
+      vars:
+        dataset_pull_args: "{{ dataset_pull_args }}"
+
+    - name: Dataset setup completed
+      debug:
+        msg: |
+          ============================================
+          Dataset Setup Completed!
+          ============================================
+          
+          Dataset location: {{ dataset_path }}
+          
+          Next step:
+          ansible-playbook train.yml -i inventory.ini -l {{ inventory_hostname }}

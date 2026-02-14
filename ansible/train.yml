@@ -1,0 +1,63 @@
+---
+# Playbook: train.yml
+# Runs training on remote machine
+# Usage: ansible-playbook train.yml -i inventory.ini -l gpu_servers \
+#   -e "model_name=tcn_lossless" \
+#   -e "training_epochs=100"
+
+- name: Train HSI Compression Model on Remote Machine
+  hosts: "{{ target_hosts | default('gpu_servers') }}"
+  gather_facts: yes
+
+  vars:
+    training_config: "hsi_compression/configs/models/{{ model_name | default('tcn_lossless') }}.yaml"
+    model_name: "{{ model_name | default('tcn_lossless') }}"
+    training_epochs: "{{ training_epochs | default(100) }}"
+    batch_size: "{{ batch_size | default(8) }}"
+    learning_rate: "{{ learning_rate | default(0.0001) }}"
+
+  tasks:
+    - name: Display training information
+      debug:
+        msg: |
+          ============================================
+          Model Training
+          ============================================
+          
+          Target host: {{ inventory_hostname }}
+          Model: {{ model_name }}
+          Config: {{ training_config }}
+          Epochs: {{ training_epochs }}
+          Batch size: {{ batch_size }}
+          Learning rate: {{ learning_rate }}
+          Dataset: {{ dataset_path }}
+          Checkpoint dir: {{ checkpoint_dir }}
+          WandB enabled: {{ wandb_enabled | lower }}
+          ============================================
+
+    - name: Include training role
+      include_role:
+        name: training
+      vars:
+        training_config: "{{ training_config }}"
+        model_name: "{{ model_name }}"
+        training_epochs: "{{ training_epochs }}"
+        batch_size: "{{ batch_size }}"
+        learning_rate: "{{ learning_rate }}"
+        run_async: "{{ run_async | default(false) }}"
+        training_timeout: "{{ training_timeout | default(86400) }}"
+
+    - name: Training completed
+      debug:
+        msg: |
+          ============================================
+          Training Completed!
+          ============================================
+          
+          Model: {{ model_name }}
+          Checkpoint dir: {{ checkpoint_dir }}
+          Logs dir: {{ logs_dir }}
+          
+          Next step:
+          ansible-playbook evaluate.yml -i inventory.ini -l {{ inventory_hostname }} \
+            -e "checkpoint_path={{ checkpoint_dir }}/best_val_loss.pt"

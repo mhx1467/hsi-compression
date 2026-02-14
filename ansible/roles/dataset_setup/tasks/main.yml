@@ -1,0 +1,89 @@
+---
+# Dataset setup role
+# Downloads or prepares the dataset
+
+- name: Check if dataset already exists
+  stat:
+    path: "{{ dataset_path }}/patches"
+  register: dataset_check
+
+- name: Display dataset status
+  debug:
+    msg: "Dataset {{ 'found' if dataset_check.stat.exists else 'not found' }} at {{ dataset_path }}"
+
+- name: Create dataset directory
+  file:
+    path: "{{ dataset_path }}"
+    state: directory
+    mode: '0755'
+
+- name: Check if pull_dataset script exists
+  stat:
+    path: "{{ project_dir }}/pipelines/{{ pull_dataset_script }}.py"
+  register: pull_script_check
+
+- name: Run pull_dataset script if available
+  shell: |
+    source {{ venv_dir }}/bin/activate
+    cd {{ project_dir }}
+    python pipelines/{{ pull_dataset_script }}.py \
+      --output {{ dataset_path }} \
+      {{ dataset_pull_args | default('') }}
+  when:
+    - pull_script_check.stat.exists
+    - not dataset_check.stat.exists
+  register: pull_result
+  changed_when: true
+
+- name: Display pull_dataset result
+  debug:
+    msg: "{{ pull_result.stdout | default('Dataset pull script executed') }}"
+  when: pull_script_check.stat.exists and not dataset_check.stat.exists
+
+- name: Generate dummy dataset if pull script not available and dataset doesn't exist
+  block:
+    - name: Generate dummy HySpecNet-11k dataset (for testing)
+      shell: |
+        source {{ venv_dir }}/bin/activate
+        cd {{ project_dir }}
+        python generate_dummy_data.py \
+          --output {{ dataset_path }} \
+          --num_scenes 10 \
+          --patches_per_scene 10 \
+          --num_bands 224 \
+          --patch_size 32
+      when: not pull_script_check.stat.exists
+      register: dummy_gen
+      changed_when: true
+
+    - name: Display dummy dataset generation result
+      debug:
+        msg: "{{ dummy_gen.stdout }}"
+      when: not pull_script_check.stat.exists
+
+  when: not dataset_check.stat.exists
+
+- name: Verify dataset
+  shell: |
+    if [ -d "{{ dataset_path }}/patches" ]; then
+      count=$(ls -1 {{ dataset_path }}/patches/*.npy 2>/dev/null | wc -l)
+      echo "Dataset verified: Found $count patches"
+    else
+      echo "Dataset directory not found"
+    fi
+  register: dataset_verify
+  changed_when: false
+
+- name: Display dataset verification
+  debug:
+    msg: "{{ dataset_verify.stdout }}"
+
+- name: Create dataset metadata file
+  copy:
+    dest: "{{ dataset_path }}/.metadata"
+    content: |
+      dataset_name: {{ dataset_name }}
+      created_at: {{ ansible_date_time.iso8601 }}
+      host: {{ inventory_hostname }}
+      dataset_path: {{ dataset_path }}
+    mode: '0644'

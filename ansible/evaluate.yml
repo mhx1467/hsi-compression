@@ -1,0 +1,51 @@
+---
+# Playbook: evaluate.yml
+# Runs evaluation on remote machine
+# Usage: ansible-playbook evaluate.yml -i inventory.ini -l gpu_servers \
+#   -e "checkpoint_path=/path/to/checkpoint.pt"
+
+- name: Evaluate HSI Compression Model on Remote Machine
+  hosts: "{{ target_hosts | default('gpu_servers') }}"
+  gather_facts: yes
+
+  vars:
+    evaluation_config: "hsi_compression/configs/models/{{ model_name | default('tcn_lossless') }}.yaml"
+    model_name: "{{ model_name | default('tcn_lossless') }}"
+    checkpoint_path: "{{ checkpoint_path | default(checkpoint_dir ~ '/best_val_loss.pt') }}"
+
+  tasks:
+    - name: Display evaluation information
+      debug:
+        msg: |
+          ============================================
+          Model Evaluation
+          ============================================
+          
+          Target host: {{ inventory_hostname }}
+          Model: {{ model_name }}
+          Config: {{ evaluation_config }}
+          Checkpoint: {{ checkpoint_path }}
+          Dataset: {{ dataset_path }}
+          Results dir: {{ results_dir }}
+          ============================================
+
+    - name: Include evaluation role
+      include_role:
+        name: evaluation
+      vars:
+        evaluation_config: "{{ evaluation_config }}"
+        checkpoint_path: "{{ checkpoint_path }}"
+
+    - name: Evaluation completed
+      debug:
+        msg: |
+          ============================================
+          Evaluation Completed!
+          ============================================
+          
+          Model: {{ model_name }}
+          Checkpoint: {{ checkpoint_path }}
+          Results: {{ results_dir }}
+          
+          To retrieve results:
+          scp -r {{ ansible_user }}@{{ ansible_host }}:{{ results_dir }}/* ./local_results/

@@ -1,0 +1,146 @@
+---
+# Evaluation role
+# Runs model evaluation on test data
+
+- name: Validate evaluation parameters
+  assert:
+    that:
+      - evaluation_config is defined
+      - checkpoint_path is defined
+    fail_msg: "evaluation_config and checkpoint_path must be defined"
+
+- name: Display evaluation configuration
+  debug:
+    msg: |
+      Starting evaluation with:
+      - Config: {{ evaluation_config }}
+      - Checkpoint: {{ checkpoint_path }}
+      - Dataset: {{ dataset_path }}
+
+- name: Check if checkpoint exists
+  stat:
+    path: "{{ checkpoint_path }}"
+  register: checkpoint_check
+
+- name: Fail if checkpoint doesn't exist
+  fail:
+    msg: "Checkpoint not found at {{ checkpoint_path }}"
+  when: not checkpoint_check.stat.exists
+
+- name: Check if dataset exists
+  stat:
+    path: "{{ dataset_path }}/patches"
+  register: eval_dataset_check
+
+- name: Fail if dataset doesn't exist
+  fail:
+    msg: "Dataset not found at {{ dataset_path }}. Please run dataset setup first."
+  when: not eval_dataset_check.stat.exists
+
+- name: Create evaluation timestamp
+  set_fact:
+    eval_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+- name: Create evaluation log file
+  file:
+    path: "{{ logs_dir }}/evaluation_{{ eval_timestamp }}.log"
+    state: touch
+  register: eval_log_file
+
+- name: Create results directory
+  file:
+    path: "{{ results_dir }}/{{ eval_timestamp }}"
+    state: directory
+
+- name: Run evaluation
+  shell: |
+    set -e
+    source {{ venv_dir }}/bin/activate
+    cd {{ project_dir }}
+    
+    echo "Evaluation started at $(date)" | tee -a {{ eval_log_file.path }}
+    echo "Config: {{ evaluation_config }}" | tee -a {{ eval_log_file.path }}
+    echo "Checkpoint: {{ checkpoint_path }}" | tee -a {{ eval_log_file.path }}
+    echo "---" | tee -a {{ eval_log_file.path }}
+    
+    python evaluate.py \
+      --config {{ evaluation_config }} \
+      --checkpoint {{ checkpoint_path }} \
+      --overrides \
+        data.root_dir={{ dataset_path }} \
+        logging.checkpoint_dir={{ checkpoint_dir }} \
+        {% if eval_metrics is defined %} \
+        metrics.{% for metric in eval_metrics %}{{ metric.key }}={{ metric.value }}{% if not loop.last %} \
+        metrics.{% endif %}{% endfor %} \
+        {% endif %} \
+        2>&1 | tee -a {{ eval_log_file.path }}
+    
+    echo "Evaluation completed at $(date)" | tee -a {{ eval_log_file.path }}
+  register: eval_result
+  changed_when: eval_result.stdout != ""
+
+- name: Parse evaluation metrics
+  shell: |
+    source {{ venv_dir }}/bin/activate
+    cd {{ project_dir }}
+    
+    # Extract metrics from evaluation output
+    grep -E "(PSNR|SSIM|SAM|BPP)" {{ eval_log_file.path }} | tail -10 || echo "No metrics found yet"
+  register: eval_metrics_output
+  changed_when: false
+
+- name: Display evaluation results
+  debug:
+    msg: |
+      Evaluation completed!
+      
+      Log file: {{ eval_log_file.path }}
+      Results directory: {{ results_dir }}/{{ eval_timestamp }}
+      
+      Metrics:
+      {{ eval_metrics_output.stdout }}
+
+- name: Create evaluation summary
+  copy:
+    dest: "{{ results_dir }}/{{ eval_timestamp }}/summary.txt"
+    content: |
+      Evaluation Summary
+      ==================
+      
+      Date: {{ eval_timestamp }}
+      Host: {{ inventory_hostname }}
+      
+      Configuration:
+      - Config file: {{ evaluation_config }}
+      - Checkpoint: {{ checkpoint_path }}
+      - Dataset: {{ dataset_path }}
+      
+      Metrics:
+      {{ eval_metrics_output.stdout }}
+      
+      Log file: {{ eval_log_file.path }}
+    mode: '0644'
+
+- name: Copy evaluation results
+  shell: |
+    if [ -f "{{ project_dir }}/evaluation_results.json" ]; then
+      cp {{ project_dir }}/evaluation_results.json {{ results_dir }}/{{ eval_timestamp }}/
+    fi
+  ignore_errors: yes
+  changed_when: false
+
+- name: Archive results
+  archive:
+    path: "{{ results_dir }}/{{ eval_timestamp }}"
+    dest: "{{ results_dir }}/evaluation_{{ eval_timestamp }}.tar.gz"
+    format: gz
+  register: archive_result
+  changed_when: archive_result.changed
+
+- name: Display archive info
+  debug:
+    msg: |
+      Results archived:
+      Archive: {{ results_dir }}/evaluation_{{ eval_timestamp }}.tar.gz
+      Size: {{ archive_result.dest_state.size | default('unknown') }} bytes
+  when: archive_result.changed

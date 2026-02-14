@@ -1,0 +1,29 @@
+defaults:
+  - /default
+
+model:
+  name: mamba_lossy
+  latent_channels: 192
+  normalize_input: true
+  spectral_mamba:
+    d_model: 256
+    d_state: 16
+    n_layers: 4
+    dropout: 0.1
+  spatial_mamba:
+    d_model: 256
+    d_state: 16
+    n_layers: 4
+    window_size: 16
+    dropout: 0.1
+  hyperprior:
+    channels: [192, 192, 128]
+    kernel_size: 3
+
+training:
+  lambda: 0.01  # rate-distortion tradeoff (can override)
+
+loss:
+  type: rate_distortion
+  distortion: mse  # mse or sam or mse_sam (weighted)
+  rate_weight: ${training.lambda}

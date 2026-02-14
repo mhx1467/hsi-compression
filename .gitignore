@@ -1,0 +1,7 @@
+build/
+*.egg-info/
+.venv/
+checkpoints/
+dummy_*/
+
+__pycache__

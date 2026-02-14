@@ -1,0 +1,44 @@
+# Base configuration for HSI compression training
+seed: 42
+
+data:
+  dataset: hyspecnet11k
+  root_dir: null  # Override with actual path
+  mode: easy  # easy or hard
+  split: train  # train, val, test
+  batch_size: 8
+  num_workers: 4
+  shuffle: true
+
+training:
+  epochs: 100
+  optimizer:
+    type: adam
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 1.0e-6
+  gradient_clip: 1.0
+  warmup_epochs: 5
+  mixed_precision: false
+
+validation:
+  interval: 5  # validate every N epochs
+  save_best: true
+
+logging:
+  wandb:
+    enabled: true
+    project: hsi-compression
+    entity: null  # your wandb entity
+    notes: null
+  log_interval: 100
+  checkpoint_dir: ./checkpoints
+  save_interval: 10  # save checkpoint every N epochs
+
+device:
+  type: cuda  # cuda or cpu
+  device_id: 0
