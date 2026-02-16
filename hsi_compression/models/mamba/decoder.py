@@ -26,6 +26,104 @@ def _check_mamba_available(function_name: str):
         )
 
 
+class SpectralMambaBlock(nn.Module):
+    """Mamba block for spectral dimension processing in decoder."""
+    
+    def __init__(
+        self,
+        d_model: int = 256,
+        d_state: int = 16,
+        dropout: float = 0.1,
+    ):
+        """
+        Args:
+            d_model: Model dimension
+            d_state: State dimension
+            dropout: Dropout probability
+        """
+        super().__init__()
+        
+        _check_mamba_available("SpectralMambaBlock")
+        
+        self.mamba = Mamba(d_model, d_state=d_state)
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Forward pass for spectral processing.
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W)
+        
+        Returns:
+            Output tensor of shape (B, C, H, W)
+        """
+        B, C, H, W = x.shape
+        
+        # Reshape to sequence format
+        residual = x
+        x_seq = x.reshape(B, C, -1).transpose(1, 2)  # (B, H*W, C)
+        
+        x_seq = self.norm(x_seq)
+        x_seq = self.mamba(x_seq)
+        x_seq = self.dropout(x_seq)
+        
+        # Reshape back to 2D
+        x = x_seq.transpose(1, 2).reshape(B, C, H, W)
+        return residual + x
+
+
+class SpatialMambaBlock(nn.Module):
+    """Vision Mamba block for spatial dimension processing in decoder."""
+    
+    def __init__(
+        self,
+        d_model: int = 256,
+        d_state: int = 16,
+        window_size: int = 16,
+        dropout: float = 0.1,
+    ):
+        """
+        Args:
+            d_model: Model dimension
+            d_state: State dimension
+            window_size: Local window size (e.g., 16x16 patches)
+            dropout: Dropout probability
+        """
+        super().__init__()
+        
+        _check_mamba_available("SpatialMambaBlock")
+        
+        self.window_size = window_size
+        self.mamba = Mamba(d_model, d_state=d_state)
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Forward pass for spatial processing.
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W)
+        
+        Returns:
+            Output tensor of shape (B, C, H, W)
+        """
+        B, C, H, W = x.shape
+        
+        residual_2d = x
+        x_seq = x.reshape(B, C, -1).transpose(1, 2)  # (B, H*W, C)
+        
+        residual_seq = x_seq
+        x_seq = self.norm(x_seq)
+        x_seq = self.mamba(x_seq)
+        x_seq = self.dropout(x_seq)
+        
+        x_seq = residual_seq + x_seq
+        return x_seq.transpose(1, 2).reshape(B, C, H, W) + residual_2d
+
+
 class MambaDecoder(nn.Module):
     """Mamba-based decoder for hyperspectral compression."""
     
@@ -64,13 +162,13 @@ class MambaDecoder(nn.Module):
         
         # Spectral Mamba layers (mirror of encoder)
         self.spectral_mamba_layers = nn.ModuleList([
-            self._make_mamba_block(spectral_d_model, spectral_d_state, dropout)
+            SpectralMambaBlock(spectral_d_model, spectral_d_state, dropout)
             for _ in range(spectral_n_layers)
         ])
         
         # Spatial Mamba layers (mirror of encoder)
         self.spatial_mamba_layers = nn.ModuleList([
-            self._make_spatial_mamba_block(spectral_d_model, spatial_d_state, spatial_window_size, dropout)
+            SpatialMambaBlock(spectral_d_model, spatial_d_state, spatial_window_size, dropout)
             for _ in range(spatial_n_layers)
         ])
         
@@ -86,47 +184,6 @@ class MambaDecoder(nn.Module):
             nn.PixelShuffle(2) if out_channels >= 56 else nn.Identity(),
             nn.Conv2d(out_channels if out_channels >= 56 else out_channels * 4, out_channels, 3, padding=1),
         )
-    
-    @staticmethod
-    def _make_mamba_block(d_model: int, d_state: int, dropout: float):
-        """Create a Mamba block for spectral processing."""
-        _check_mamba_available("_make_mamba_block")
-        mamba = Mamba(d_model, d_state=d_state)
-        norm = nn.LayerNorm(d_model)
-        
-        class MambaBlock(nn.Module):
-            def forward(self, x: Tensor) -> Tensor:
-                residual = x
-                x = norm(x)
-                x = mamba(x)
-                x = nn.Dropout(dropout)(x)
-                return residual + x
-        
-        return MambaBlock()
-    
-    @staticmethod
-    def _make_spatial_mamba_block(d_model: int, d_state: int, window_size: int, dropout: float):
-        """Create a Mamba block for spatial processing."""
-        _check_mamba_available("_make_spatial_mamba_block")
-        mamba = Mamba(d_model, d_state=d_state)
-        norm = nn.LayerNorm(d_model)
-        
-        class SpatialMambaBlock(nn.Module):
-            def forward(self, x: Tensor) -> Tensor:
-                B, C, H, W = x.shape
-                
-                residual_2d = x
-                x_seq = x.reshape(B, C, -1).transpose(1, 2)  # (B, H*W, C)
-                
-                residual_seq = x_seq
-                x_seq = norm(x_seq)
-                x_seq = mamba(x_seq)
-                x_seq = nn.Dropout(dropout)(x_seq)
-                
-                x_seq = residual_seq + x_seq
-                return x_seq.transpose(1, 2).reshape(B, C, H, W) + residual_2d
-        
-        return SpatialMambaBlock()
     
     def forward(self, latent: Tensor) -> Tensor:
         """

@@ -4,7 +4,7 @@ import argparse
 import torch
 import sys
 from pathlib import Path
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -39,12 +39,31 @@ def main():
         default=[],
         help='Config overrides (e.g., training.lr=0.001)'
     )
+    parser.add_argument(
+        '--quick-check',
+        action='store_true',
+        help='Run quick sanity check on small subset (32 samples, 2 epochs)'
+    )
+    parser.add_argument(
+        '--quick-check-samples',
+        type=int,
+        default=32,
+        help='Number of samples to use in quick-check mode (default: 32)'
+    )
     
     args = parser.parse_args()
     
     # Load configuration
     print(f"Loading config from {args.config}")
     config = load_config(args.config, args.overrides)
+    
+    # Apply quick-check overrides if enabled
+    if args.quick_check:
+        print("\n" + "="*60)
+        print("QUICK-CHECK MODE ENABLED")
+        print("="*60)
+        print(f"Using {args.quick_check_samples} samples with 2 epochs for sanity check")
+        config.training.epochs = 2
     
     print("\nConfiguration:")
     print_config(config)
@@ -73,6 +92,12 @@ def main():
         )
     )
     
+    # Apply quick-check subset if enabled
+    if args.quick_check:
+        indices = list(range(min(args.quick_check_samples, len(train_dataset))))
+        train_dataset = Subset(train_dataset, indices)
+        print(f"  [QUICK-CHECK] Using subset of {len(train_dataset)} samples")
+    
     val_dataset = None
     if config.get('validation') and config.validation.get('data_root'):
         val_dataset = get_dataset(
@@ -85,6 +110,12 @@ def main():
                 normalize_input=config.model.normalize_input
             )
         )
+        
+        # Apply quick-check subset to validation if enabled
+        if args.quick_check:
+            indices = list(range(min(args.quick_check_samples // 4, len(val_dataset))))
+            val_dataset = Subset(val_dataset, indices)
+            print(f"  [QUICK-CHECK] Using subset of {len(val_dataset)} validation samples")
     
     print(f"Training samples: {len(train_dataset)}")
     if val_dataset:

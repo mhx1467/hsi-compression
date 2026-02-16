@@ -22,17 +22,9 @@
           Note: This setup assumes CUDA is already installed.
           ============================================
 
-    - name: Include system setup role
+    - name: Include consolidated environment setup role
       include_role:
-        name: system_setup
-
-    - name: Include Python setup role
-      include_role:
-        name: python_setup
-
-    - name: Include project setup role
-      include_role:
-        name: project_setup
+        name: environment_setup
 
     - name: Setup completed
       debug:

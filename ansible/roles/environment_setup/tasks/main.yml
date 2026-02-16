@@ -1,0 +1,346 @@
+---
+# Consolidated Environment Setup Role
+# Combines system_setup, python_setup, and project_setup into a single role
+# This role handles all environment setup needed before training
+
+# ============================================================================
+# SYSTEM SETUP
+# ============================================================================
+- name: Wait for unattended-upgrade to finish
+  shell: |
+    # Wait up to 5 minutes for unattended-upgrade to complete
+    for i in {1..30}; do
+      if ! pgrep -x unattended-upgr > /dev/null; then
+        echo "unattended-upgrade finished"
+        exit 0
+      fi
+      echo "Waiting for unattended-upgrade... ($i/30)"
+      sleep 10
+    done
+    echo "WARNING: unattended-upgrade still running after 5 minutes, continuing anyway"
+    exit 0
+  become: yes
+  changed_when: false
+  ignore_errors: yes
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  become: yes
+  ignore_errors: yes
+
+- name: Install system dependencies
+  apt:
+    name:
+      - build-essential
+      - git
+      - wget
+      - curl
+      - libssl-dev
+      - libffi-dev
+      - python3-dev
+      - python3-pip
+      - pkg-config
+      - apt-transport-https
+    state: present
+  become: yes
+  ignore_errors: yes
+
+- name: Check CUDA is available
+  shell: |
+    if command -v nvcc &> /dev/null; then
+      CUDA_VERSION=$(nvcc --version | grep "release" | grep -oP '\d+\.\d+')
+      echo "CUDA_FOUND: $CUDA_VERSION"
+    else
+      echo "CUDA_NOT_FOUND"
+    fi
+  register: cuda_check
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display CUDA status
+  debug:
+    msg: "{{ cuda_check.stdout }}"
+
+- name: Fail if CUDA not available
+  fail:
+    msg: |
+      CUDA is not installed or not in PATH.
+      Please ensure CUDA 11.6+ is installed before running this playbook.
+      Install CUDA manually or contact your system administrator.
+  when: "'CUDA_NOT_FOUND' in cuda_check.stdout"
+
+# ============================================================================
+# PYTHON SETUP
+# ============================================================================
+- name: Check available Python versions
+  shell: |
+    apt-cache search python3 | grep "^python3\.[0-9]" | awk '{print $1}' | head -10
+  register: available_pythons
+  changed_when: false
+  become: yes
+
+- name: Display available Python versions
+  debug:
+    msg: "Available Python versions: {{ available_pythons.stdout_lines }}"
+
+- name: Use system Python3 if specific version not available
+  set_fact:
+    python_to_install: "{{ python_version | default('3') }}"
+  when: python_version is defined
+
+- name: Install Python and development tools
+  apt:
+    name:
+      - python3
+      - python3-dev
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: yes
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Check installed Python version
+  shell: |
+    python3 --version 2>&1 | awk '{print $2}'
+  register: installed_python
+  changed_when: false
+
+- name: Display installed Python version
+  debug:
+    msg: "Installed Python: {{ installed_python.stdout }}"
+
+- name: Check if virtual environment exists
+  stat:
+    path: "{{ venv_dir }}"
+  register: venv_path
+
+- name: Create virtual environment
+  command: /usr/bin/python3 -m venv {{ venv_dir }}
+  when: not venv_path.stat.exists
+
+- name: Upgrade pip in virtual environment
+  pip:
+    name:
+      - pip
+      - wheel
+      - setuptools
+    state: latest
+    virtualenv: "{{ venv_dir }}"
+
+- name: Display Python environment info
+  shell: |
+    source {{ venv_dir }}/bin/activate
+    python --version
+    pip --version
+  register: python_info
+  changed_when: false
+
+- name: Show Python version
+  debug:
+    msg: "{{ python_info.stdout }}"
+
+- name: Install PyTorch with CUDA 12.1 wheels
+  pip:
+    name:
+      - torch
+      - torchvision
+    extra_args: "--index-url https://download.pytorch.org/whl/cu121"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python3
+  register: pytorch_install
+
+- name: Install build dependencies (ninja, packaging)
+  pip:
+    name:
+      - ninja
+      - packaging
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python3
+  ignore_errors: yes
+  register: build_deps
+
+- name: Install mamba-ssm without build isolation
+  pip:
+    name: mamba-ssm
+    extra_args: "--no-build-isolation"
+    virtualenv: "{{ venv_dir }}"
+    virtualenv_python: python3
+  ignore_errors: yes
+  register: mamba_install
+
+- name: Verify mamba-ssm installation
+  shell: |
+    source {{ venv_dir }}/bin/activate
+    python -c "from mamba_ssm import Mamba; print('mamba-ssm installed successfully')"
+  args:
+    executable: /bin/bash
+  register: mamba_verify
+  changed_when: false
+  ignore_errors: yes
+
+- name: Check if project directory exists
+  stat:
+    path: "{{ project_dir }}"
+  register: project_path
+
+- name: Check if project directory is a git repo
+  stat:
+    path: "{{ project_dir }}/.git"
+  register: git_dir
+
+- name: Remove directory if not a git repo
+  file:
+    path: "{{ project_dir }}"
+    state: absent
+  become: yes
+  when:
+    - git_dir.stat.exists is defined
+    - not git_dir.stat.exists
+
+- name: Clone or update HSI compression repository
+  git:
+    repo: "{{ git_repo | default('https://github.com/mhx1467/hsi-compression.git') }}"
+    dest: "{{ project_dir }}"
+    version: "{{ git_branch | default('master') }}"
+    update: yes
+    force: yes
+  become: yes
+  register: git_result
+
+- name: Display git clone/update result
+  debug:
+    msg: "Repository {{ 'updated/cloned' if git_result.changed else 'already up to date' }}"
+
+- name: Create required directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  with_items:
+    - "{{ checkpoint_dir }}"
+    - "{{ logs_dir }}"
+    - "{{ results_dir }}"
+    - "{{ dataset_path }}"
+
+- name: Create activation script for convenience
+  copy:
+    dest: "{{ project_dir }}/activate.sh"
+    content: |
+      #!/bin/bash
+      # Source this script to activate the virtual environment
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      echo "Virtual environment activated"
+      echo "Project directory: $(pwd)"
+      echo "Python: $(python --version)"
+    mode: '0755'
+
+- name: Create helper scripts directory
+  file:
+    path: "{{ project_dir }}/scripts"
+    state: directory
+
+- name: Create training wrapper script
+  copy:
+    dest: "{{ project_dir }}/scripts/train.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      
+      # Parse arguments
+      CONFIG="${1:-hsi_compression/configs/models/tcn_lossless.yaml}"
+      EPOCHS="${2:-100}"
+      
+      echo "Starting training..."
+      echo "Config: $CONFIG"
+      echo "Epochs: $EPOCHS"
+      echo "Checkpoint dir: {{ checkpoint_dir }}"
+      
+      python train.py \
+        --config "$CONFIG" \
+        --overrides \
+          data.root_dir={{ dataset_path }} \
+          training.epochs=$EPOCHS \
+          logging.checkpoint_dir={{ checkpoint_dir }} \
+          logging.wandb_enabled={{ wandb_enabled | lower }}
+    mode: '0755'
+
+- name: Create evaluation wrapper script
+  copy:
+    dest: "{{ project_dir }}/scripts/evaluate.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      
+      source {{ venv_dir }}/bin/activate
+      cd {{ project_dir }}
+      
+      # Parse arguments
+      CONFIG="${1:-hsi_compression/configs/models/tcn_lossless.yaml}"
+      CHECKPOINT="${2:-{{ checkpoint_dir }}/best_val_loss.pt}"
+      
+      echo "Starting evaluation..."
+      echo "Config: $CONFIG"
+      echo "Checkpoint: $CHECKPOINT"
+      
+      python evaluate.py \
+        --config "$CONFIG" \
+        --checkpoint "$CHECKPOINT" \
+        --overrides \
+          data.root_dir={{ dataset_path }}
+    mode: '0755'
+
+- name: Install project dependencies from pyproject.toml (core only)
+  shell: |
+    . {{ venv_dir }}/bin/activate
+    pip install --upgrade pip setuptools wheel
+    # Install core package first (without optional dependencies)
+    pip install .
+  args:
+    chdir: "{{ project_dir }}"
+    executable: /bin/bash
+  register: pip_install
+  changed_when: "'Successfully installed' in pip_install.stdout or 'already satisfied' in pip_install.stdout"
+
+- name: Verify installation - check core package is installed
+  shell: |
+    . {{ venv_dir }}/bin/activate
+    pip show hsi-compression
+  args:
+    executable: /bin/bash
+  register: package_info
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display environment setup completion
+  debug:
+    msg: Environment Setup Completed Successfully!
+
+- name: Display environment paths summary
+  debug:
+    msg: |
+      ======================================
+      Environment Setup Complete
+      ======================================
+
+      Project directory:   {{ project_dir }}
+      Virtualenv:          {{ venv_dir }}
+
+      Dataset path:        {{ dataset_path }}
+      Checkpoints:         {{ checkpoint_dir }}
+      Logs:                {{ logs_dir }}
+      Results:             {{ results_dir }}
+
+      Activation command:
+        source {{ project_dir }}/activate.sh
+
+      Training example:
+        {{ project_dir }}/scripts/train.sh
+
+      Evaluation example:
+        {{ project_dir }}/scripts/evaluate.sh
